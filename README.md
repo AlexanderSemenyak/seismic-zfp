@@ -1,3 +1,5 @@
+original: https://github.com/equinor/seismic-zfp
+
 # seismic-zfp #
 
 [![LGPLv3 License](https://img.shields.io/badge/License-LGPL%20v3-green.svg)](https://opensource.org/licenses/)
