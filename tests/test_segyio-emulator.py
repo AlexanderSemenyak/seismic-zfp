@@ -2,7 +2,9 @@ import numpy as np
 import pytest
 import seismic_zfp
 import segyio
+from seismic_zfp import utils
 
+SGZ_FILE_2D = 'test_data/small-2d.sgz'
 SGZ_FILE_1 = 'test_data/small_1bit.sgz'
 SGZ_FILE_2 = 'test_data/small_2bit.sgz'
 SGZ_FILE_4 = 'test_data/small_4bit.sgz'
@@ -165,27 +167,27 @@ def test_subvolume_accessor_errors():
     with seismic_zfp.open(SGZ_FILE_4) as sgzfile:
 
         with pytest.raises(IndexError):
+            sgzfile.subvolume[1:7:None, 20:21:None, 0:40:None]
+
+        with pytest.raises(IndexError):
+            sgzfile.subvolume[1:6:None, 20:26:None, 0:40:None]
+
+        with pytest.raises(IndexError):
+            sgzfile.subvolume[1:6:None, 20:21:None, 0:400:None]
+
+        with pytest.raises(IndexError):
             sgzfile.subvolume[0:6:None, 20:21:None, 0:40:None]
 
         with pytest.raises(IndexError):
-            sgzfile.subvolume[0:5:None, 20:26:None, 0:40:None]
-
-        with pytest.raises(IndexError):
-            sgzfile.subvolume[0:5:None, 20:21:None, 0:400:None]
-
-        with pytest.raises(IndexError):
-            sgzfile.subvolume[-1:6:None, 20:21:None, 0:40:None]
-
-        with pytest.raises(IndexError):
-            sgzfile.subvolume[0:5:None, 20:21:None, 0:40:3]
+            sgzfile.subvolume[1:6:None, 20:21:None, 0:40:3]
 
     with seismic_zfp.open(SGZ_FILE_DEC_8) as sgzfile:
 
         with pytest.raises(IndexError):
-            sgzfile.subvolume[0:5:1, 20:21:None, 0:None:None]
+            sgzfile.subvolume[1:6:1, 20:21:None, 0:None:None]
 
         with pytest.raises(IndexError):
-            sgzfile.subvolume[0:5:2, 20:21:3, 0:None:None]
+            sgzfile.subvolume[1:6:2, 20:21:3, 0:None:None]
 
 
 def compare_cube(sgz_filename, sgy_filename, tolerance):
@@ -193,5 +195,28 @@ def compare_cube(sgz_filename, sgy_filename, tolerance):
     vol_sgz = seismic_zfp.tools.cube(sgz_filename)
     assert np.allclose(vol_sgz, vol_sgy, rtol=tolerance)
 
-def test_cube_func():
+
+def compare_dt(sgz_filename, sgy_filename):
+    with segyio.open(sgy_filename) as sgy_file:
+        dt_sgy = segyio.tools.dt(sgy_file)
+    with seismic_zfp.open(sgz_filename) as sgz_file:
+        dt_sgz = seismic_zfp.tools.dt(sgz_file)
+    assert dt_sgy == dt_sgz
+
+
+def test_tools_functions():
     compare_cube(SGZ_FILE_8, SGY_FILE, tolerance=1e-10)
+    compare_dt(SGZ_FILE_8, SGY_FILE)
+
+
+def test_dimensionality_errors():
+    sgzfile = seismic_zfp.open(SGZ_FILE_2D)
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        il = sgzfile.iline[0]
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        xl = sgzfile.xline[0]
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        z_slice = sgzfile.depth_slice[0]

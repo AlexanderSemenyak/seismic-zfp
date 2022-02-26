@@ -2,13 +2,15 @@ import pytest
 from click.testing import CliRunner
 from seismic_zfp.cli import cli
 import os
+import warnings
 
 try:
-    import zgy2sgz
+    with warnings.catch_warnings():
+        # pyzgy will warn us that sdglue is not available. This is expected, and safe for our purposes.
+        warnings.filterwarnings("ignore", message="seismic store access is not available: No module named 'sdglue'")
+        import pyzgy
 except ImportError:
-    _has_zgy2sgz = False
-else:
-    _has_zgy2sgz = True
+    pyzgy = None
 
 def test_sgy2sgz():
     runner = CliRunner()
@@ -32,6 +34,18 @@ def test_sgy2sgz_convert_default():
     input_file = os.path.join("test_data", "small.sgy")
     input_file_absolute = os.path.abspath(input_file)
     output_file = "small_4bit_converted.sgz"
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["sgy2sgz", input_file_absolute, output_file])
+        assert os.path.exists(output_file)
+        assert os.stat(output_file).st_size > 0
+    assert result.exit_code == 0
+
+
+def test_sgy2sgz_convert_2d_default():
+    input_file = os.path.join("test_data", "small-2d.sgy")
+    input_file_absolute = os.path.abspath(input_file)
+    output_file = "small-2d_4bit_converted.sgz"
     runner = CliRunner()
     with runner.isolated_filesystem():
         result = runner.invoke(cli, ["sgy2sgz", input_file_absolute, output_file])
@@ -89,14 +103,14 @@ def test_sgy2sgz_convert_all_params():
     assert result.exit_code == 0
 
 
-@pytest.mark.skipif(not _has_zgy2sgz, reason="Requires zgy2sgz")
+@pytest.mark.skipif(pyzgy is None, reason="Requires pyzgy")
 def test_zgy2sgz():
     runner = CliRunner()
     result = runner.invoke(cli, ["zgy2sgz", "--help"])
     assert result.exit_code == 0
 
 
-@pytest.mark.skipif(not _has_zgy2sgz, reason="Requires zgy2sgz")
+@pytest.mark.skipif(pyzgy is None, reason="Requires pyzgy")
 def test_zgy2sgz_convert_default():
     input_file = os.path.join("test_data", "zgy", "small-8bit.zgy")
     input_file_absolute = os.path.abspath(input_file)
@@ -109,7 +123,7 @@ def test_zgy2sgz_convert_default():
     assert result.exit_code == 0
 
 
-@pytest.mark.skipif(not _has_zgy2sgz, reason="Requires zgy2sgz")
+@pytest.mark.skipif(pyzgy is None, reason="Requires pyzgy")
 def test_zgy2sgz_convert_bits_per_voxel():
     input_file = os.path.join("test_data", "zgy", "small-16bit.zgy")
     input_file_absolute = os.path.abspath(input_file)
@@ -124,7 +138,7 @@ def test_zgy2sgz_convert_bits_per_voxel():
     assert result.exit_code == 0
 
 
-@pytest.mark.skipif(not _has_zgy2sgz, reason="Requires zgy2sgz")
+@pytest.mark.skipif(pyzgy is None, reason="Requires pyzgy")
 def test_zgy2sgz_convert_all_params():
     input_file = os.path.join("test_data", "zgy", "small-32bit.zgy")
     input_file_absolute = os.path.abspath(input_file)

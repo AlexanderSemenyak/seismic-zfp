@@ -5,6 +5,8 @@ import numpy as np
 
 from .sgzconstants import DISK_BLOCK_BYTES
 
+class WrongDimensionalityError(TypeError):
+    pass
 
 class FileOffset(int):
     """Convenience class to enable distinction between default header values and file offsets"""
@@ -20,13 +22,16 @@ class CubeWithAxes:
         self.xlines = xlines
         self.samples = samples
 
-
 class Geometry:
     """Lightweight place to keep track of IL/XL ranges"""
     def __init__(self, min_il, max_il, min_xl, max_xl):
         self.ilines = range(min_il, max_il)
         self.xlines = range(min_xl, max_xl)
 
+class Geometry2d(Geometry):
+    """Subclass used to signify 2D input SEG-Y"""
+    def __init__(self, tracecount):
+        self.traces = range(tracecount)
 
 class InferredGeometry(Geometry):
     """Subclass used to signify irregular input SEG-Y"""
@@ -43,6 +48,12 @@ class InferredGeometry(Geometry):
         return 'IL:[{},{},{}] -- XL:[{},{},{}]'.format(self.min_il, self.max_il, self.il_step,
                                                        self.min_xl, self.max_xl, self.xl_step)
 
+def read_range_file(file, offset, length):
+    file.seek(offset)
+    return file.read(length)
+
+def read_range_blob(file, offset, length):
+    return file.download_blob(offset=offset, length=length).readall()
 
 def generate_fake_seismic(n_ilines, n_xlines, n_samples, min_iline=0, min_xline=0):
     # Generate an array which looks a *bit* like an impulse-response test...
@@ -105,7 +116,12 @@ def signed_int_to_bytes(bytes):
     return struct.pack('<i', bytes)
 
 
-def define_blockshape(bits_per_voxel, blockshape):
+def define_blockshape_2d(bits_per_voxel, blockshape):
+    assert blockshape[0] == 1
+    return define_blockshape_3d(bits_per_voxel, blockshape)
+
+
+def define_blockshape_3d(bits_per_voxel, blockshape):
     if sum([1 for n in list(blockshape) + [bits_per_voxel] if n == -1]) > 1:
         raise ValueError("Blockshape is underdefined")
 

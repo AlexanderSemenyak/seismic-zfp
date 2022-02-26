@@ -4,7 +4,7 @@ original: https://github.com/equinor/seismic-zfp
 
 [![LGPLv3 License](https://img.shields.io/badge/License-LGPL%20v3-green.svg)](https://opensource.org/licenses/)
 [![Travis](https://travis-ci.org/equinor/seismic-zfp.svg?branch=master)](https://travis-ci.org/equinor/seismic-zfp)
-[![Appveyor](https://ci.appveyor.com/api/projects/status/dta3y1ge7lasamis?svg=true)](https://ci.appveyor.com/project/da-wad/seismic-zfp)
+[![codecov](https://codecov.io/gh/equinor/seismic-zfp/branch/master/graph/badge.svg)](https://codecov.io/gh/equinor/seismic-zfp)
 [![PyPi Version](https://img.shields.io/pypi/v/seismic-zfp.svg)](https://pypi.org/project/seismic-zfp/)
 
 Python library to convert SEG-Y files to compressed cubes and retrieve arbitrary sub-volumes from these, fast.
@@ -43,7 +43,14 @@ compared to n_traces disk blocks for SEG-Y
 #### Using z-slice optimized layout ####
 - A z-slice can be read by accessing **just** n_traces/4096 disk blocks, 
 compared to n_traces disk blocks for SEG-Y
+#### 2D SEG-Y Support ####
+As of v0.2.4 support for compressing 2D SEG-Y files (INLINE_3D and CROSSLINE_3D always zero) is included.
+Compression and reading follows the same pattern as 3D files, but segyio emulation only provides the 
+following attributes: trace, header, samples, bin & text. However an additional funciton read_subplane() 
+is available for extracting horizontally and vertically contrained data.
 
+
+#### Headers ####
 The [seismic-zfp (.SGZ) format](docs/file-specification.md) also allows for preservation of information in 
 SEG-Y file and trace headers, with compression code identifying constant 
 and varying trace header values and storing these appropriately.
@@ -53,20 +60,24 @@ For further explanation of the design and implementation of seismic-zfp, please 
 #### NOTE: Previously the extension .sz was used for seismic-zfp, but has been replaced with .sgz to avoid confusion around the compression algorithm used.
 
 ## Get seismic-zfp
-- Wheels from [PyPI](https://pypi.org/project/seismic-zfp/) with zgy support: `pip install seismic-zfp[zgy]`
-- Wheels from [PyPI](https://pypi.org/project/seismic-zfp/) without zgy support: `pip install seismic-zfp`
+- Wheels from [PyPI](https://pypi.org/project/seismic-zfp/) with zgy and vds support: `pip install seismic-zfp[zgy,vds]`
+- Wheels from [PyPI](https://pypi.org/project/seismic-zfp/) without zgy or vds support: `pip install seismic-zfp`
 - Source from [Github](https://github.com/equinor/seismic-zfp): `git clone https://github.com/equinor/seismic-zfp.git`
 
-*Note that seismic-zfp depends on the Python packages [ZFPY](https://pypi.org/project/zfpy/) and [zgy2sgz](https://pypi.org/project/zgy2sgz/), which are binary distributions on PyPI built for Linux and Windows.*
+*Note that seismic-zfp depends on the Python package [ZFPY](https://pypi.org/project/zfpy/), which is a binary distribution on PyPI built for Linux and Windows.*
+
+*The optional dependency [pyvds](https://github.com/equinor/pyvds) - requires openvds package from Bluware which is **not** open-source*
+
+*The optional dependency of zgy2sgz has been replaced with [pyzgy](https://github.com/equinor/pyzgy) - a pure-Python alternative.*
 
 ## Examples ##
 
 Full example code is provided [here](examples), but the following reference is useful:
 
-#### Create SGZ files from SEG-Y or ZGY ####
+#### Create SGZ files from SEG-Y, ZGY or VDS ####
 
 ```python
-from seismic_zfp.conversion import SegyConverter, ZgyConverter, SgzConverter
+from seismic_zfp.conversion import SegyConverter, ZgyConverter, VdsConverter
 
 with SegyConverter("in.sgy") as converter:
     # Create a "standard" SGZ file with 8:1 compression, using in-memory method
@@ -77,6 +88,10 @@ with SegyConverter("in.sgy") as converter:
 with ZgyConverter("in_8-int.zgy") as converter:
     # 8-bit integer ZGY and 1-bit SGZ have similar quality
     converter.run("out_8bit.sgz", bits_per_voxel=1)
+
+with VdsConverter("in.vds") as converter:
+    # VDS compression is superior, but doesn't permit non-cubic bricks...
+    converter.run("out.sgz", bits_per_voxel=4, blockshape=(8, 8, 128))
 ```
 
 #### Convert SGZ files to SEG-Y ####
@@ -111,13 +126,21 @@ with seismic_zfp.open("in.sgz")) as sgzfile:
     binary_file_header = sgzfile.bin
     text_file_header = sgzfile.text[0]
 ```
+Including equivalents to segyio.tools
+```python
+with seismic_zfp.open("in.sgz") as sgz_file:
+    dt_sgz = seismic_zfp.tools.dt(sgz_file)
+
+cube_sgz = seismic_zfp.tools.cube("in.sgz")
+```
+
 Plus some extended utility functionality:
 ```python
-import seismic_zfp
 with seismic_zfp.open("in.sgz")) as sgzfile:
     subvolume = sgzfile.subvolume[IL_NO_START:IL_NO_STOP:IL_NO_STEP, 
                                   XL_NO_START:XL_NO_STOP:XL_NO_STEP,
                                   SAMP_NO_START:SAMP_NO_STOP:SAMP_NO_STEP]
+    header_arr = sgzfile.get_tracefield_values(segyio.tracefield.TraceField.NStackedTraces)
 ```
 
 ## Command Line Interface

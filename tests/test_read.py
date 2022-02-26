@@ -1,8 +1,13 @@
 import numpy as np
 import pytest
+import seismic_zfp
 from seismic_zfp.read import *
-from seismic_zfp.utils import get_correlated_diagonal_length, get_anticorrelated_diagonal_length, InferredGeometry
+from seismic_zfp import utils
 import itertools
+
+import mock
+import psutil
+
 
 SGZ_FILE_025 = 'test_data/small_025bit.sgz'
 SGZ_FILE_05 = 'test_data/small_05bit.sgz'
@@ -12,7 +17,12 @@ SGZ_FILE_4 = 'test_data/small_4bit.sgz'
 SGZ_FILE_8 = 'test_data/small_8bit.sgz'
 SGZ_FILE_2_64x64 = 'test_data/small_2bit-64x64.sgz'
 SGZ_FILE_8_8x8 = 'test_data/small_8bit-8x8.sgz'
+SGZ_FILE_OLD = 'test_data/small_v0.0.1.sgz'
 SGY_FILE = 'test_data/small.sgy'
+
+SGY_FILE_2D = 'test_data/small-2d.sgy'
+SGZ_FILE_2D = 'test_data/small-2d.sgz'
+
 
 SGY_FILE_IRREG = 'test_data/small-irregular.sgy'
 SGZ_FILE_IRREG = 'test_data/small-irregular.sgz'
@@ -70,6 +80,15 @@ def test_read_trace_header():
             assert sgz_header == sgy_header
 
 
+def test_read_trace_header_2d():
+    reader = SgzReader(SGZ_FILE_2D)
+    with segyio.open(SGY_FILE_2D, strict=False) as sgyfile:
+        for trace_number in range(25):
+            sgz_header = reader.gen_trace_header(trace_number)
+            sgy_header = sgyfile.header[trace_number]
+            assert sgz_header == sgy_header
+
+
 def test_read_trace_header_preload():
     reader = SgzReader(SGZ_FILE_1)
     with segyio.open(SGY_FILE) as sgyfile:
@@ -77,6 +96,78 @@ def test_read_trace_header_preload():
             sgz_header = reader.gen_trace_header(trace_number, load_all_headers=True)
             sgy_header = sgyfile.header[trace_number]
             assert sgz_header == sgy_header
+
+
+def test_get_tracefield_values():
+    with SgzReader(SGZ_FILE_1) as reader:
+        with segyio.open(SGY_FILE) as sgyfile:
+             sgy_headers = np.array([h[segyio.tracefield.TraceField.INLINE_3D] for h in sgyfile.header[:]]).reshape((5, 5))
+        sgz_headers = reader.get_tracefield_values(segyio.tracefield.TraceField.INLINE_3D)
+        assert  np.array_equal(sgz_headers, sgy_headers)
+        # Also check that no other arrays got read in to memory...
+        with pytest.raises(KeyError):
+            _ = reader.variant_headers[segyio.tracefield.TraceField.CROSSLINE_3D]
+
+
+def test_read_irregular_file_not_structred():
+    with SgzReader(SGZ_FILE_IRREG) as reader:
+        assert reader.structured is False
+
+
+def test_read_variant_headers_padding_mismatch():
+    with SgzReader(SGZ_FILE_IRREG) as reader:
+        reader.read_variant_headers(include_padding=True)
+        with pytest.raises(AssertionError):
+            reader.read_variant_headers(include_padding=False)
+        reader.clear_variant_headers()
+        reader.read_variant_headers(include_padding=False)
+
+
+def compare_trace_coord(sgz_filename, sgy_filename, tolerance):
+    with segyio.open(sgy_filename) as sgyfile:
+        reader = SgzReader(sgz_filename)
+        for start, stop in [(20.0, 60.0), (4.0, 84.0), (None, 16.0), (32.0, None)]:
+            for i, trace_sgy in enumerate(sgyfile.trace):
+                trace_sgz = reader.get_trace_by_coord(i, start, stop)
+                sgy_start = np.where(sgyfile.samples == start)[0][0] if start is not None else None
+                sgy_stop = np.where(sgyfile.samples == stop)[0][0] if stop is not None else None
+                trace_sgy_compare = trace_sgy[sgy_start:sgy_stop]
+                assert np.allclose(trace_sgz, trace_sgy_compare, rtol=tolerance)
+
+
+def compare_trace_index(sgz_filename, sgy_filename, tolerance):
+    with segyio.open(sgy_filename) as sgyfile:
+        reader = SgzReader(sgz_filename)
+        for start, stop in [(5,15), (1, 21), (None, 4), (8, None)]:
+            for i, trace_sgy in enumerate(sgyfile.trace):
+                trace_sgz = reader.get_trace(i, start, stop)
+                assert np.allclose(trace_sgz, trace_sgy[start:stop], rtol=tolerance)
+
+
+def compare_trace_index_2d(sgz_filename, sgy_filename, tolerance):
+    with segyio.open(sgy_filename, ignore_geometry=True) as sgyfile:
+        reader = SgzReader(sgz_filename)
+        for i, trace_sgy in enumerate(sgyfile.trace):
+            trace_sgz = reader.get_trace(i)
+            assert np.allclose(trace_sgz, trace_sgy, rtol=tolerance)
+
+
+def compare_trace_old(sgz_filename, sgy_filename, tolerance):
+    with segyio.open(sgy_filename) as sgyfile:
+        reader = SgzReader(sgz_filename)
+        for i, trace_sgy in enumerate(sgyfile.trace):
+            trace_sgz = reader.get_trace(i)
+            # Accuracy issues in last block of chunk, skip this.
+            assert np.allclose(trace_sgz[0:48], trace_sgy[0:48], rtol=tolerance)
+
+
+def test_get_trace():
+    compare_trace_old(SGZ_FILE_OLD, SGY_FILE, tolerance=1e-2)
+    compare_trace_index_2d(SGZ_FILE_2D, SGY_FILE_2D, tolerance=1.e-3)
+    compare_trace_index(SGZ_FILE_2_64x64, SGY_FILE, tolerance=1e-4)
+    compare_trace_index(SGZ_FILE_8, SGY_FILE, tolerance=1e-10)
+    compare_trace_coord(SGZ_FILE_2_64x64, SGY_FILE, tolerance=1e-4)
+    compare_trace_coord(SGZ_FILE_8, SGY_FILE, tolerance=1e-10)
 
 
 def compare_inline(sgz_filename, sgy_filename, lines, tolerance):
@@ -87,6 +178,7 @@ def compare_inline(sgz_filename, sgy_filename, lines, tolerance):
                 slice_sgz = reader.read_inline(line_number)
                 slice_segy = segyfile.iline[segyfile.ilines[line_number]]
             assert np.allclose(slice_sgz, slice_segy, rtol=tolerance)
+            assert reader.local == True
 
 
 def compare_inline_number(sgz_filename, sgy_filename, line_coords, tolerance):
@@ -97,12 +189,13 @@ def compare_inline_number(sgz_filename, sgy_filename, line_coords, tolerance):
                 slice_sgz = reader.read_inline_number(line_number)
                 slice_segy = segyfile.iline[line_number]
             assert np.allclose(slice_sgz, slice_segy, rtol=tolerance)
+            assert reader.local == True
 
 
 def compare_inline_unstructured(sgz_filename, sgy_filename, tolerance):
     reader = SgzReader(sgz_filename)
     with segyio.open(sgy_filename, ignore_geometry=True) as segyfile:
-        geom = InferredGeometry({(h[189], h[193]): i for i, h in enumerate(segyfile.header)})
+        geom = utils.InferredGeometry({(h[189], h[193]): i for i, h in enumerate(segyfile.header)})
         for line_number in geom.ilines:
             slice_sgz = reader.read_inline_number(line_number)
             slice_segy = np.zeros((len(geom.xlines), len(segyfile.samples)))
@@ -110,6 +203,7 @@ def compare_inline_unstructured(sgz_filename, sgy_filename, tolerance):
                 if header[189] == line_number:
                     slice_segy[header[193] - geom.min_xl, :] = trace
             assert np.allclose(slice_sgz, slice_segy, rtol=tolerance)
+            assert reader.local == True
 
 
 def test_read_inline():
@@ -133,6 +227,7 @@ def compare_crossline(sgz_filename, sgy_filename, lines, tolerance):
                 slice_sgz = reader.read_crossline(line_number)
                 slice_segy = segyfile.xline[segyfile.xlines[line_number]]
             assert np.allclose(slice_sgz, slice_segy, rtol=tolerance)
+            assert reader.local == True
 
 
 def compare_crossline_number(sgz_filename, sgy_filename, line_coords, tolerance):
@@ -143,6 +238,7 @@ def compare_crossline_number(sgz_filename, sgy_filename, line_coords, tolerance)
                 slice_sgz = reader.read_crossline_number(line_number)
                 slice_segy = segyfile.xline[line_number]
             assert np.allclose(slice_sgz, slice_segy, rtol=tolerance)
+            assert reader.local == True
 
 
 def test_read_crossline():
@@ -165,6 +261,7 @@ def compare_zslice(sgz_filename, tolerance):
                 slice_sgz = reader.read_zslice(line_number)
                 slice_segy = segyfile.depth_slice[line_number]
                 assert np.allclose(slice_sgz, slice_segy, rtol=tolerance)
+                assert reader.local == True
 
 def compare_zslice_coord(sgz_filename, tolerance):
     with segyio.open(SGY_FILE) as segyfile:
@@ -174,6 +271,7 @@ def compare_zslice_coord(sgz_filename, tolerance):
                 slice_sgz = reader.read_zslice_coord(slice_coord)
                 slice_segy = segyfile.depth_slice[slice_index]
                 assert np.allclose(slice_sgz, slice_segy, rtol=tolerance)
+                assert reader.local == True
 
 def test_read_zslice():
     compare_zslice(SGZ_FILE_025, tolerance=1e+1)
@@ -187,13 +285,48 @@ def test_read_zslice():
     compare_zslice_coord(SGZ_FILE_8, tolerance=1e-10)
 
 
+def compare_correlated_diagonal_cropped(sgz_filename, min_cd_idx, max_cd_idx, min_trace_idx, max_trace_idx):
+    reader = SgzReader(sgz_filename)
+    for line_number in [-1, 0, 1]:
+
+        slice_sgz = reader.read_correlated_diagonal(line_number)[min_cd_idx:max_cd_idx, min_trace_idx:max_trace_idx]
+        slice_sgz_crop = reader.read_correlated_diagonal(line_number,
+                                                         min_cd_idx=min_cd_idx, max_cd_idx=max_cd_idx,
+                                                         min_sample_idx=min_trace_idx, max_sample_idx=max_trace_idx)
+        assert np.array_equal(slice_sgz, slice_sgz_crop)
+
+
+def test_read_correlated_diagonal_cropped():
+    compare_correlated_diagonal_cropped(SGZ_FILE_8, 1, 3, 5, 48)
+    compare_correlated_diagonal_cropped(SGZ_FILE_8_8x8, 0, 2, None, None)
+    compare_correlated_diagonal_cropped(SGZ_FILE_2_64x64, 1, 3, 7, 40)
+
+
+def compare_anticorrelated_diagonal_cropped(sgz_filename, min_ad_idx, max_ad_idx, min_trace_idx, max_trace_idx):
+    reader = SgzReader(sgz_filename)
+    for line_number in [3, 4, 5]:
+
+        slice_sgz = reader.read_anticorrelated_diagonal(line_number)[min_ad_idx:max_ad_idx, min_trace_idx:max_trace_idx]
+        slice_sgz_crop = reader.read_anticorrelated_diagonal(line_number,
+                                                             min_ad_idx=min_ad_idx, max_ad_idx=max_ad_idx,
+                                                             min_sample_idx=min_trace_idx, max_sample_idx=max_trace_idx)
+        assert np.array_equal(slice_sgz, slice_sgz_crop)
+
+
+def test_read_anticorrelated_diagonal_cropped():
+    compare_anticorrelated_diagonal_cropped(SGZ_FILE_8, 1, 3, 5, 48)
+    compare_anticorrelated_diagonal_cropped(SGZ_FILE_8_8x8, 0, 2, None, None)
+    compare_anticorrelated_diagonal_cropped(SGZ_FILE_2_64x64, 1, 3, 7, 40)
+
+
+
 def compare_correlated_diagonal(sgz_filename, sgy_filename):
     with segyio.open(sgy_filename) as segyfile:
         for preload in [True, False]:
             reader = SgzReader(sgz_filename, preload=preload)
             for line_number in range(-reader.n_xlines+1, reader.n_ilines - 1):
                 slice_sgz = reader.read_correlated_diagonal(line_number)
-                diagonal_length = get_correlated_diagonal_length(line_number, len(segyfile.ilines), len(segyfile.xlines))
+                diagonal_length = utils.get_correlated_diagonal_length(line_number, len(segyfile.ilines), len(segyfile.xlines))
                 slice_segy = np.zeros((diagonal_length, len(segyfile.samples)))
                 if line_number >= 0:
                     for d in range(diagonal_length):
@@ -215,7 +348,7 @@ def compare_anticorrelated_diagonal(sgz_filename, sgy_filename):
             reader = SgzReader(sgz_filename, preload=preload)
             for line_number in range(reader.n_ilines + reader.n_xlines - 1):
                 slice_sgz = reader.read_anticorrelated_diagonal(line_number)
-                diagonal_length = get_anticorrelated_diagonal_length(line_number, len(segyfile.ilines), len(segyfile.xlines))
+                diagonal_length = utils.get_anticorrelated_diagonal_length(line_number, len(segyfile.ilines), len(segyfile.xlines))
                 slice_segy = np.zeros((diagonal_length, len(segyfile.samples)))
                 if line_number < len(segyfile.xlines):
                     for d in range(diagonal_length):
@@ -230,6 +363,20 @@ def compare_anticorrelated_diagonal(sgz_filename, sgy_filename):
 def test_read_anticorrelated_diagonal():
     for sgz_file, sgyfile in SGZ_SGY_FILE_PAIRS:
         compare_anticorrelated_diagonal(sgz_file, sgyfile)
+
+
+def compare_subplane(sgz_filename, min_trace, max_trace, min_z, max_z):
+    with seismic_zfp.open(sgz_filename) as sgz_file:
+        sgz_subplane = sgz_file.read_subplane(min_trace=min_trace, max_trace=max_trace, min_z=min_z, max_z=max_z)
+        sgz_cropped_traces = np.stack([t for t in sgz_file.trace[min_trace:max_trace]])[:,min_z:max_z]
+
+    assert np.array_equal(sgz_subplane, sgz_cropped_traces)
+
+
+def test_read_subplane():
+    compare_subplane(SGZ_FILE_2D, 3, 21, 10, 20)
+    compare_subplane(SGZ_FILE_2D, 24, 25, 0, 50)
+    compare_subplane(SGZ_FILE_2D, 1, 17, 1, 17)
 
 
 def compare_subvolume(sgz_filename, tolerance):
@@ -257,6 +404,7 @@ def test_read_subvolume():
 def test_index_errors():
     # Quis custodiet custard?
     reader = SgzReader(SGZ_FILE_4)
+    reader_2d = SgzReader(SGZ_FILE_2D)
 
     with pytest.raises(IndexError):
         reader.read_inline(-1)
@@ -283,10 +431,22 @@ def test_index_errors():
         reader.read_correlated_diagonal(5)
 
     with pytest.raises(IndexError):
+        reader.read_correlated_diagonal(1, min_cd_idx=1, max_cd_idx=9)
+
+    with pytest.raises(IndexError):
+        reader.read_correlated_diagonal(4, min_cd_idx=-1, max_cd_idx=2)
+
+    with pytest.raises(IndexError):
         reader.read_anticorrelated_diagonal(-1)
 
     with pytest.raises(IndexError):
         reader.read_anticorrelated_diagonal(9)
+
+    with pytest.raises(IndexError):
+        reader.read_anticorrelated_diagonal(4, min_ad_idx=1, max_ad_idx=9)
+
+    with pytest.raises(IndexError):
+        reader.read_anticorrelated_diagonal(5, min_ad_idx=-1, max_ad_idx=2)
 
     with pytest.raises(IndexError):
         reader.read_subvolume(0, 10, 0, 1, 0, 10)
@@ -296,6 +456,12 @@ def test_index_errors():
 
     with pytest.raises(IndexError):
         reader.read_subvolume(0, 1, 0, 1, 0, 100)
+
+    with pytest.raises(IndexError):
+        reader_2d.read_subplane(0, 1, 0, 100)
+
+    with pytest.raises(IndexError):
+        reader_2d.read_subplane(0, 26, 0, 16)
 
     with pytest.raises(IndexError):
         reader.get_trace(-1)
@@ -310,6 +476,32 @@ def test_index_errors():
         reader.gen_trace_header(25)
 
 
+def test_wrong_dimensionality_errors():
+    reader_3d = SgzReader(SGZ_FILE_4)
+    reader_2d = SgzReader(SGZ_FILE_2D)
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        reader_2d.read_inline(1)
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        reader_2d.read_crossline(2)
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        reader_2d.read_zslice(3)
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        reader_2d.read_correlated_diagonal(-1)
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        reader_2d.read_anticorrelated_diagonal(2)
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        reader_2d.read_subvolume(0, 10, 0, 1, 0, 10)
+
+    with pytest.raises(utils.WrongDimensionalityError):
+        reader_3d.read_subplane(0, 1, 0, 100)
+
+
 def test_filetype_error():
     with pytest.raises(RuntimeError):
         SgzReader(SGY_FILE)
@@ -318,3 +510,33 @@ def test_filetype_error():
 def test_filenotfound_errors():
     with pytest.raises(FileNotFoundError):
         SgzReader('test_data/this_file_does_not_exist')
+
+
+@mock.patch('psutil.virtual_memory')
+def test_oom_error(mocked_virtual_memory):
+    psutil.virtual_memory().total = 1024
+    with pytest.raises(RuntimeError):
+        SgzReader(SGZ_FILE_8, preload=True)
+
+
+def test_hw_info_repr():
+    expected_table = '1 | 0 | 0\n5 | 0 | 0\n9 | 0 | 0\n13 | 0 | 0\n17 | 0 | 0\n21 | 0 | 0\n25 | 0 | 0\n29 | 0 | 0\n31 | 0 | 0\n33 | 0 | 0\n35 | 0 | 0\n37 | 1 | 0\n41 | 0 | 0\n45 | 0 | 0\n49 | 0 | 0\n53 | 0 | 0\n57 | 0 | 0\n61 | 0 | 0\n65 | 0 | 0\n69 | 0 | 0\n71 | 0 | 0\n73 | 0 | 0\n77 | 0 | 0\n81 | 0 | 0\n85 | 0 | 0\n89 | 0 | 0\n91 | 0 | 0\n93 | 0 | 0\n95 | 0 | 0\n97 | 0 | 0\n99 | 0 | 0\n101 | 0 | 0\n103 | 0 | 0\n105 | 0 | 0\n107 | 0 | 0\n109 | 0 | 0\n111 | 0 | 0\n113 | 0 | 0\n115 | 0 | 0\n117 | 0 | 0\n119 | 0 | 0\n121 | 0 | 0\n123 | 0 | 0\n125 | 0 | 0\n127 | 0 | 0\n129 | 0 | 0\n131 | 0 | 0\n133 | 0 | 0\n135 | 0 | 0\n137 | 0 | 0\n139 | 0 | 0\n141 | 0 | 0\n143 | 0 | 0\n145 | 0 | 0\n147 | 0 | 0\n149 | 0 | 0\n151 | 0 | 0\n153 | 0 | 0\n155 | 0 | 0\n157 | 0 | 0\n159 | 0 | 0\n161 | 0 | 0\n163 | 0 | 0\n165 | 0 | 0\n167 | 0 | 0\n169 | 0 | 0\n171 | 0 | 0\n173 | 0 | 0\n175 | 0 | 0\n177 | 0 | 0\n179 | 0 | 0\n181 | 0 | 0\n185 | 0 | 0\n189 | 0 | 189\n193 | 0 | 193\n197 | 0 | 0\n201 | 0 | 0\n203 | 0 | 0\n205 | 0 | 0\n209 | 0 | 0\n211 | 0 | 0\n213 | 0 | 0\n215 | 0 | 0\n217 | 0 | 0\n219 | 0 | 0\n223 | 0 | 0\n225 | 0 | 0\n229 | 0 | 0\n231 | 0 | 0\n'
+    with SgzReader(SGZ_FILE_4) as reader:
+        hw_table = reader.hw_info.__repr__()
+        assert hw_table == expected_table
+
+
+def test_repr():
+    with SgzReader(SGZ_FILE_4) as reader:
+        representation = reader.__repr__()
+        as_string = reader.__str__()
+    assert as_string == 'seismic-zfp 3d file test_data/small_4bit.sgz, Version(0.0.0.dev):\n  compression ratio: 8:1\n  inlines: 5 [1, 5]\n  crosslines: 5 [20, 24]\n  samples: 50 [0.0, 196.0]\n  traces: 25\n  Header arrays: [INLINE_3D, CROSSLINE_3D]'
+    assert representation == 'SgzReader(test_data/small_4bit.sgz)'
+
+
+def test_repr_2d():
+    with SgzReader(SGZ_FILE_2D) as reader:
+        representation = reader.__repr__()
+        as_string = reader.__str__()
+    assert as_string == 'seismic-zfp 2d file test_data/small-2d.sgz, Version(0.2.4.dev):\n  compression ratio: 4:1\n  samples: 50 [0.0, 196.0]\n  traces: 25\n  Header arrays: [CDP_X, CDP_Y]'
+    assert representation == 'SgzReader(test_data/small-2d.sgz)'

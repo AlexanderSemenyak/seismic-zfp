@@ -6,10 +6,13 @@ def get_long_description():
     with open('README.md') as f:
         raw_readme = f.read()
     base_repo = 'https://github.com/equinor/seismic-zfp/tree/'
-    with open('.git/refs/heads/master') as f:
-        commit = f.read().rstrip()
-    substituted_readme = re.sub('\\]\\((?!https)', '](' + base_repo + commit + '/', raw_readme)
-    return substituted_readme
+    try:
+        # Travis job provides this, but don't clutter Github Actions for code coverage
+        with open('.git/refs/heads/master') as f:
+            commit = f.read().rstrip()
+        return re.sub('\\]\\((?!https)', '](' + base_repo + commit + '/', raw_readme)
+    except FileNotFoundError:
+        return raw_readme
 
 
 setuptools.setup(name='seismic-zfp',
@@ -21,15 +24,17 @@ setuptools.setup(name='seismic-zfp',
                  license='LGPL-3.0',
 
                  use_scm_version=True,
-                 install_requires=['numpy>=1.16', 'numpy>=1.20; python_version>="3.9.0"',
-                                   'segyio', 'zfpy', 'psutil', 'click'],
+                 install_requires=['numpy>=1.20', 'segyio', 'zfpy', 'psutil', 'click'],
                  extras_require={
-                     'zgy': ['zgy2sgz>=0.1.3']
+                     'zgy': ['pyzgy'],
+                     'vds': ['pyvds'],
+                     'xr': ['xarray>=0.20.2'],
+                     'azure': ['azure-storage-blob'],
                  },
                  setup_requires=['setuptools', 'setuptools_scm'],
-                 entry_points="""
-                     [console_scripts]
-                     seismic-zfp=seismic_zfp.cli:cli
-                 """,
+                 entry_points={
+                     'xarray.backends': ['sgz_engine=seismic_zfp.sgz_xarray:SeismicZfpBackendEntrypoint'],
+                     'console_scripts' : ['seismic-zfp=seismic_zfp.cli:cli']
+                 },
                  packages=['seismic_zfp']
                  )
