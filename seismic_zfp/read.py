@@ -46,6 +46,9 @@ class SgzReader(object):
     read_anticorrelated_diagonal(ad_id)
         Decompresses and returns one diagonal IL ~ -XL from SGZ file as 2D numpy array
 
+    read_subplane(min_trace, max_trace, min_z, max_z):
+        Decompresses and returns an arbitrary sub-plane from 2D SGZ file as 2D numpy array
+
     read_subvolume(min_il, max_il, min_xl, max_xl, min_z, max_z)
         Decompresses and returns an arbitrary sub-volume from SGZ file as 3D numpy array
 
@@ -268,7 +271,7 @@ class SgzReader(object):
             msgs = ["Rather than a beep  Or a rude error message  These words: 'File not found.'",
                     "A file that big?  It might be very useful.  But now it is gone.",
                     "Three things are certain:  Death, taxes, and lost data.  Guess which has occurred."]
-            raise FileNotFoundError("Cannot find {} ... {}".format(self._filename, random.choice(msgs)))
+            raise FileNotFoundError(f"Cannot find {self._filename} ... {random.choice(msgs)}")
         return open(self._filename, 'rb')
 
     def close_sgz_file(self):
@@ -529,12 +532,14 @@ class SgzReader(object):
             for d in range(min_cd_idx, cd_len + min_cd_idx):
                 cd[d - min_cd_idx, :] = self.get_trace((d + cd_id) * self.n_xlines + d,
                                                        min_sample_id=min_sample_idx,
-                                                       max_sample_id=max_sample_idx)
+                                                       max_sample_id=max_sample_idx,
+                                                       override_unstructured_mapping=True)
         else:
             for d in range(min_cd_idx, cd_len + min_cd_idx):
                 cd[d - min_cd_idx, :] = self.get_trace(d * self.n_xlines + d - cd_id,
                                                        min_sample_id=min_sample_idx,
-                                                       max_sample_id=max_sample_idx)
+                                                       max_sample_id=max_sample_idx,
+                                                       override_unstructured_mapping=True)
         return cd
 
     def read_anticorrelated_diagonal(self, ad_id, min_ad_idx=None, max_ad_idx=None, min_sample_idx=None, max_sample_idx=None):
@@ -589,12 +594,14 @@ class SgzReader(object):
             for d in range(min_ad_idx, ad_len + min_ad_idx):
                 ad[d - min_ad_idx, :] = self.get_trace(ad_id + d * (self.n_xlines - 1),
                                                        min_sample_id=min_sample_idx,
-                                                       max_sample_id=max_sample_idx)
+                                                       max_sample_id=max_sample_idx,
+                                                       override_unstructured_mapping=True)
         else:
             for d in range(min_ad_idx, ad_len + min_ad_idx):
                 ad[d - min_ad_idx, :] = self.get_trace((ad_id - self.n_xlines + 1 + d) * self.n_xlines + (self.n_xlines - d - 1),
                                                        min_sample_id=min_sample_idx,
-                                                       max_sample_id=max_sample_idx)
+                                                       max_sample_id=max_sample_idx,
+                                                       override_unstructured_mapping=True)
         return ad
 
     def read_subplane(self, min_trace, max_trace, min_z, max_z, access_padding=False):
@@ -709,7 +716,7 @@ class SgzReader(object):
                                    0, self.n_samples)
 
     def get_trace_by_coord(self, index, min_sample_no=None, max_sample_no=None):
-        """Reads one zslice from SGZ file (time or depth, depending on file contents)
+        """Reads one trace from SGZ file, cropping referenced by sample coordinates
 
         Parameters
         ----------
@@ -733,8 +740,8 @@ class SgzReader(object):
         max_sample_no = self.zslices[-1] + self.zslices[1] - self.zslices[0] if max_sample_no is None else max_sample_no
         return self.get_trace(index, self.get_zslice_index(min_sample_no), self.get_zslice_index(max_sample_no, include_stop=True))
 
-    def get_trace(self, index, min_sample_id=None, max_sample_id=None):
-        """Reads one trace from SGZ file
+    def get_trace(self, index, min_sample_id=None, max_sample_id=None, override_unstructured_mapping=False):
+        """Reads one trace from SGZ file, cropping referenced by sample indexes
 
         Parameters
         ----------
@@ -766,7 +773,7 @@ class SgzReader(object):
             return np.squeeze(trace)
 
         else:
-            if not self.structured:
+            if (not self.structured) and (not override_unstructured_mapping):
                 self.get_unstructured_mask()
                 index = np.arange(self.mask.shape[0])[self.mask != 0][index]
 
@@ -853,6 +860,22 @@ class SgzReader(object):
                     values = np.frombuffer(buffer, dtype=np.int32)
                     self.variant_headers[k] = values[self.mask] if use_mask else values
 
+    def get_tracefield_1d(self, tracefield):
+        """Efficiently provides all trace header values for a given trace header field
+
+        Parameters
+        ----------
+        tracefield : int / segyio.tracefield.TraceField
+            The trace header value position, or its programmer-friendly
+            enumerated version from segyio
+
+        Returns
+        -------
+        header_array : numpy.ndarray of int32, shape (tracecount)
+        """
+        self.read_variant_headers(include_padding=True, tracefields=[segyio.tracefield.TraceField(tracefield)])
+        return self.variant_headers[tracefield]
+
     def get_tracefield_values(self, tracefield):
         """Efficiently provides all trace header values for a given trace header field
 
@@ -866,9 +889,11 @@ class SgzReader(object):
         -------
         header_array : numpy.ndarray of int32, shape (n_ilines, n_xlines)
         """
-        self.read_variant_headers(include_padding=True, tracefields=[segyio.tracefield.TraceField(tracefield)])
-        header_array = self.variant_headers[tracefield].reshape((self.n_ilines, self.n_xlines))
-        return header_array
+        header_array = self.get_tracefield_1d(tracefield)
+        if self.is_2d:
+            return header_array
+        else:
+            return header_array.reshape((self.n_ilines, self.n_xlines))
 
     def gen_trace_header(self, index, load_all_headers=False):
         """Generates one trace header from SGZ file

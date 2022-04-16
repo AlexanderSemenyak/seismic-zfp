@@ -79,8 +79,7 @@ class SeismicFileConverter(object):
                                   header_detection=header_detection)
         else:
             raise NotImplementedError(
-                "Invalid header_detection method {}: valid methods: 'heuristic', 'thorough', 'exhaustive', 'strip'"
-                    .format(header_detection))
+                f"Invalid header_detection method {header_detection}: valid methods: 'heuristic', 'thorough', 'exhaustive', 'strip'")
 
     def write_headers(self, header_detection, header_info):
         # Treating "thorough" mode the same until this point, where we've read the entire file (once)
@@ -116,8 +115,7 @@ class SeismicFileConverter(object):
             raise RuntimeError("ABORTED effort: Close all that you have. You ask way too much.")
 
         max_queue_length = min(16, (self.mem_limit // 2) // inline_set_bytes)
-        print(f'VirtualMemory={self.mem_limit / (1024 * 1024)}MB, ' \
-              f'InlineSet={inline_set_bytes / (1024 * 1024)}MB : Using queue of length {max_queue_length}')
+        print(f"VirtualMemory={self.mem_limit/(1024*1024*1024):.2f}GB  :  InlineSet={inline_set_bytes/(1024*1024):.2f}MB  :  Using queue of length {max_queue_length}")
 
         return max_queue_length
 
@@ -144,7 +142,7 @@ class SeismicFileConverter(object):
                 file_ext = 'file'
             else:
                 file_ext = self.filetype.__repr__().split('.')[1].split(':')[0]
-            msg = "With searching comes loss,  and the presence of absence:  'My {}' not found.".format(file_ext)
+            msg = f"With searching comes loss,  and the presence of absence:  'My {file_ext}' not found."
             raise FileNotFoundError(msg)
 
     def run(self, out_filename, bits_per_voxel=4, blockshape=None,
@@ -192,7 +190,7 @@ class SeismicFileConverter(object):
             Default: "heuristic".
         """
         self.out_filename = out_filename
-        print("Converting: In={}, Out={}".format(self.in_filename, self.out_filename))
+        print(f"Converting: In={self.in_filename}, Out={self.out_filename}")
 
         t0 = time.time()
 
@@ -219,7 +217,7 @@ class SeismicFileConverter(object):
                                 queuesize=max_queue_length, reduce_iops=reduce_iops, store_headers=store_headers)
         self.write_headers(header_detection, header_info)
 
-        print("Total conversion time: {}                     ".format(time.time()-t0))
+        print(f"Total conversion time: {time.time()-t0:.3f}s                     ")
 
 
 class SegyConverter(SeismicFileConverter):
@@ -257,12 +255,17 @@ class SgzConverter(SgzReader):
         return header
 
     def convert_to_segy(self, out_file):
-        spec = segyio.spec()
-        spec.samples = self.zslices
-        spec.offsets = [0]
-        spec.xlines = self.xlines
-        spec.ilines = self.ilines
-        spec.sorting = 2
+        if self.is_3d:
+            spec = segyio.spec()
+            spec.samples = self.zslices
+            spec.offsets = [0]
+            spec.xlines = self.xlines
+            spec.ilines = self.ilines
+            spec.sorting = 2
+        else:
+            spec = segyio.spec()
+            spec.samples = self.zslices
+            spec.tracecount = self.tracecount
 
         # seimcic-zfp stores the binary header from the source SEG-Y file.
         # In case someone forgot to do this, give them IBM float
@@ -275,6 +278,11 @@ class SgzConverter(SgzReader):
             new_headerbytes[DISK_BLOCK_BYTES + 3225: DISK_BLOCK_BYTES + 3227] = int_to_bytes(1)
             self.headerbytes = bytes(new_headerbytes)
             spec.format = 1
+
+        self.write_segy(spec, out_file)
+
+
+    def write_segy(self, spec, out_file):
 
         with warnings.catch_warnings():
             # segyio will warn us that out padded cube is not contiguous. This is expected, and safe.

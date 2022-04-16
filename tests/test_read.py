@@ -18,6 +18,7 @@ SGZ_FILE_8 = 'test_data/small_8bit.sgz'
 SGZ_FILE_2_64x64 = 'test_data/small_2bit-64x64.sgz'
 SGZ_FILE_8_8x8 = 'test_data/small_8bit-8x8.sgz'
 SGZ_FILE_OLD = 'test_data/small_v0.0.1.sgz'
+SGZ_FILE_HOLE = 'test_data/small_hole.sgz'
 SGY_FILE = 'test_data/small.sgy'
 
 SGY_FILE_2D = 'test_data/small-2d.sgy'
@@ -30,8 +31,8 @@ SGZ_FILE_IRREG = 'test_data/small-irregular.sgz'
 SGZ_FILE_DEC_8 = 'test_data/small-dec_8bit.sgz'
 SGY_FILE_DEC = 'test_data/small-dec.sgy'
 
-SGZ_SGY_FILE_PAIRS = [('test_data/padding/padding_{}x{}.sgz'.format(n, m),
-                       'test_data/padding/padding_{}x{}.sgy'.format(n, m))
+SGZ_SGY_FILE_PAIRS = [(f'test_data/padding/padding_{n}x{m}.sgz',
+                       f'test_data/padding/padding_{n}x{m}.sgy')
                       for n, m in itertools.product([5, 6, 7, 8], [5, 6, 7, 8])]
 
 
@@ -107,6 +108,17 @@ def test_get_tracefield_values():
         # Also check that no other arrays got read in to memory...
         with pytest.raises(KeyError):
             _ = reader.variant_headers[segyio.tracefield.TraceField.CROSSLINE_3D]
+
+
+def test_get_tracefield_values_2d():
+    with SgzReader(SGZ_FILE_2D) as reader:
+        with segyio.open(SGY_FILE_2D, strict=False) as sgyfile:
+             sgy_headers = np.array([h[segyio.tracefield.TraceField.CDP_X] for h in sgyfile.header[:]])
+        sgz_headers = reader.get_tracefield_values(segyio.tracefield.TraceField.CDP_X)
+        assert  np.array_equal(sgz_headers, sgy_headers)
+        # Also check that no other arrays got read in to memory...
+        with pytest.raises(KeyError):
+            _ = reader.variant_headers[segyio.tracefield.TraceField.CDP_Y]
 
 
 def test_read_irregular_file_not_structred():
@@ -283,6 +295,24 @@ def test_read_zslice():
     compare_zslice(SGZ_FILE_8_8x8, tolerance=1e-10)
     compare_zslice(SGZ_FILE_2_64x64, tolerance=1e-4)
     compare_zslice_coord(SGZ_FILE_8, tolerance=1e-10)
+
+
+def compare_unstructured_diagonals(sgz_filename, sgz_hole_filename, tolerance):
+    reader = SgzReader(sgz_filename)
+    reader_hole = SgzReader(sgz_hole_filename)
+
+    for line_number in [-2, -1, 1, 2]:
+        slice_sgz = reader.read_correlated_diagonal(line_number)
+        slice_sgz_hole = reader_hole.read_correlated_diagonal(line_number)
+        assert np.allclose(slice_sgz, slice_sgz_hole, rtol=tolerance)
+
+    for line_number in [2, 3, 5, 6]:
+        slice_sgz = reader.read_anticorrelated_diagonal(line_number)
+        slice_sgz_hole = reader_hole.read_anticorrelated_diagonal(line_number)
+        assert np.allclose(slice_sgz, slice_sgz_hole, rtol=tolerance)
+
+def test_read_unstructured_diagonals():
+    compare_unstructured_diagonals(SGZ_FILE_8, SGZ_FILE_HOLE, tolerance=1e-4)
 
 
 def compare_correlated_diagonal_cropped(sgz_filename, min_cd_idx, max_cd_idx, min_trace_idx, max_trace_idx):
